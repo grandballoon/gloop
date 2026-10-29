@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <title>Gloop</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="world-finite">
+    <header class="bar">
+        <div class="worlds" role="tablist" aria-label="World">
+            <button role="tab" data-world="finite">Finite</button>
+            <button role="tab" data-world="infinite">Infinite</button>
+        </div>
+        <p id="status" aria-live="polite"></p>
+        <button id="undo">Undo</button>
+        <button id="reset">Reset</button>
+    </header>
+    <main id="stage"><canvas id="canvas" aria-label="Gloops"></canvas></main>
+    <footer class="tools">
+        <button id="all">Select all</button>
+        <button id="combine">Combine</button>
+        <span class="op">
+            <button id="split">Split into</button>
+            <span class="stepper" data-name="k"><button data-step="-1" aria-label="Fewer pieces">−</button><output></output><button data-step="1" aria-label="More pieces">+</button></span>
+        </span>
+        <span class="op">
+            <button id="regroup">Regroup</button>
+            <span class="stepper" data-name="g"><button data-step="-1" aria-label="Smaller groups">−</button><output></output><button data-step="1" aria-label="Bigger groups">+</button></span>
+            <span aria-hidden="true">→</span>
+            <span class="stepper" data-name="m"><button data-step="-1" aria-label="Fewer results">−</button><output></output><button data-step="1" aria-label="More results">+</button></span>
+        </span>
+        <button id="unit">Set unit</button>
+    </footer>
+    <script type="module" src="main.js"></script>
+</body>
+</html>

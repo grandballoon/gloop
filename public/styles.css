@@ -1,0 +1,172 @@
+:root {
+    --bg: #f5f3ee;
+    --surface: #fffdf8;
+    --text: #2a2926;
+    --muted: #6e6a62;
+    --line: #d8d3c8;
+    --select: #2f6fde;
+    --finite-fill: rgba(58, 150, 138, 0.5);
+    --finite-edge: #2c7c72;
+    --infinite-fill: rgba(138, 98, 192, 0.45);
+    --infinite-edge: #6a4ea2;
+    color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #171716;
+        --surface: #21201e;
+        --text: #ecebe6;
+        --muted: #a29e95;
+        --line: #3a3834;
+        --select: #7aa7ff;
+        --finite-fill: rgba(82, 190, 175, 0.4);
+        --finite-edge: #6fd0c2;
+        --infinite-fill: rgba(170, 135, 230, 0.38);
+        --infinite-edge: #b79cf0;
+        color-scheme: dark;
+    }
+}
+
+body.world-finite {
+    --gloop-fill: var(--finite-fill);
+    --gloop-edge: var(--finite-edge);
+}
+
+body.world-infinite {
+    --gloop-fill: var(--infinite-fill);
+    --gloop-edge: var(--infinite-edge);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    height: 100%;
+}
+
+body {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    height: 100dvh;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.3 system-ui, -apple-system, sans-serif;
+    overscroll-behavior: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+.bar,
+.tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+    background: var(--surface);
+}
+
+.bar {
+    padding-top: max(8px, env(safe-area-inset-top));
+    border-bottom: 1px solid var(--line);
+}
+
+.tools {
+    flex-wrap: wrap;
+    justify-content: center;
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+}
+
+#status {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#stage {
+    position: relative;
+    min-height: 0;
+}
+
+canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+}
+
+button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+    touch-action: manipulation;
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.worlds {
+    display: inline-flex;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.worlds button {
+    border: 0;
+    border-radius: 0;
+}
+
+.worlds button[aria-selected="true"] {
+    background: var(--text);
+    color: var(--bg);
+}
+
+.op {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.stepper {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.stepper button {
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+}
+
+.stepper output {
+    min-width: 2.2ch;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
