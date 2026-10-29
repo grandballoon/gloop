@@ -1,7 +1,7 @@
 // test/layout_test.mjs
 //
-// Where gloops sit (public/layout.js): births, settling, the camera,
-// touch, and grouping a selection by nearness.
+// Where gloops sit (public/layout.js): births, settling, the camera and
+// the learner's view, touch, and grouping a selection by nearness.
 //
 // Run from the repo root, with the Node version in .nvmrc:
 //   node --test test/layout_test.mjs
@@ -9,7 +9,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { body, placeBirths, settle, targetScale, hitTest, lassoSelect, groupByProximity, toScreen, toWorld } = await import('../public/layout.js');
+const { body, placeBirths, settle, targetScale, hitTest, lassoSelect, groupByProximity, toScreen, toWorld, cameraFor, zoomAt, panBy, DEFAULT_VIEW, isDefaultView, MAX_ZOOM } = await import('../public/layout.js');
+
+const cam = (scale, width, height) => ({ scale, width, height, cx: 0, cy: 0 });
 
 const near = (a, b, tolerance = 1e-9) => Math.abs(a - b) <= tolerance;
 
@@ -17,7 +19,7 @@ test('a split starts inside its parent and replaces it', () => {
     const bodies = placeBirths([body(1, 1, 5, 0)], [2, 3, 4, 5].map((id) => ({ id, volume: 0.25, from: [1] })));
     assert.deepEqual(bodies.map((b) => b.id), [2, 3, 4, 5]);
     for (const b of bodies) {
-        assert.equal(b.target, 0.5);
+        assert.equal(b.r, 0.5);
         assert.ok(Math.hypot(b.x - 5, b.y) + b.r <= 1 + 1e-9);
     }
 });
@@ -28,7 +30,7 @@ test('a combine starts at the area-weighted centre of its parents', () => {
     const kid = bodies.find((b) => b.id === 4);
     assert.deepEqual(bodies.map((b) => b.id), [3, 4]);
     assert.ok(near(kid.x, 1) && near(kid.y, 0));
-    assert.equal(kid.target, 2);
+    assert.equal(kid.r, 2);
 });
 
 test('settling pushes overlapping gloops apart and holds the pinned one', () => {
@@ -55,24 +57,43 @@ test('the scale depends only on the total, and the whole always fits', () => {
 });
 
 test('screen and world positions round-trip', () => {
-    const cam = { scale: 40, width: 300, height: 200 };
-    const p = toWorld(toScreen({ x: 1.5, y: -2 }, cam), cam);
+    const camera = { scale: 40, width: 300, height: 200, cx: 3, cy: -1 };
+    const p = toWorld(toScreen({ x: 1.5, y: -2 }, camera), camera);
     assert.ok(near(p.x, 1.5) && near(p.y, -2));
+    assert.deepEqual(toScreen({ x: 3, y: -1 }, camera), { x: 150, y: 100 });
+});
+
+test('zooming keeps the world point under the focus in place', () => {
+    const camera = cameraFor(DEFAULT_VIEW, 50, 400, 300);
+    const focus = { x: 320, y: 40 };
+    const before = toWorld(focus, camera);
+    const view = zoomAt(DEFAULT_VIEW, camera, focus, 3);
+    const after = toWorld(focus, cameraFor(view, 50, 400, 300));
+    assert.equal(view.zoom, 3);
+    assert.ok(near(after.x, before.x) && near(after.y, before.y));
+    assert.equal(zoomAt(view, camera, focus, 1000).zoom, MAX_ZOOM);
+});
+
+test('panning moves the world with the finger', () => {
+    const camera = cameraFor(DEFAULT_VIEW, 50, 400, 300);
+    const view = panBy(DEFAULT_VIEW, camera, 100, -50);
+    assert.deepEqual(toScreen({ x: 0, y: 0 }, cameraFor(view, 50, 400, 300)), { x: 300, y: 100 });
+    assert.ok(isDefaultView(DEFAULT_VIEW) && !isDefaultView(view));
 });
 
 test('a tiny gloop is touchable across the minimum radius', () => {
-    const cam = { scale: 100, width: 400, height: 400 };
+    const camera = cam(100, 400, 400);
     const bodies = [body(1, 0.0001, 0, 0)];
-    assert.equal(hitTest(bodies, cam, { x: 215, y: 200 }, 22), 1);
-    assert.equal(hitTest(bodies, cam, { x: 230, y: 200 }, 22), null);
-    assert.equal(hitTest(bodies, cam, { x: 200, y: 200 }, 22, 1), null);
+    assert.equal(hitTest(bodies, camera, { x: 215, y: 200 }, 22), 1);
+    assert.equal(hitTest(bodies, camera, { x: 230, y: 200 }, 22), null);
+    assert.equal(hitTest(bodies, camera, { x: 200, y: 200 }, 22, 1), null);
 });
 
 test('a lasso selects the gloops whose centres it encloses', () => {
-    const cam = { scale: 10, width: 200, height: 200 };
+    const camera = cam(10, 200, 200);
     const bodies = [body(1, 1, 0, 0), body(2, 1, 5, 0), body(3, 1, -8, 0)];
     const square = [{ x: 90, y: 90 }, { x: 160, y: 90 }, { x: 160, y: 110 }, { x: 90, y: 110 }];
-    assert.deepEqual(lassoSelect(bodies, cam, square), [1, 2]);
+    assert.deepEqual(lassoSelect(bodies, camera, square), [1, 2]);
 });
 
 test('a selection groups by nearness and leaves a remainder', () => {

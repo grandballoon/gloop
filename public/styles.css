@@ -5,9 +5,10 @@
     --muted: #6e6a62;
     --line: #d8d3c8;
     --select: #2f6fde;
-    --finite-fill: rgba(58, 150, 138, 0.5);
+    /* Gloop fills are opaque: overlapping shapes in one fill read as one fluid. */
+    --finite-fill: #98c5bf;
     --finite-edge: #2c7c72;
-    --infinite-fill: rgba(138, 98, 192, 0.45);
+    --infinite-fill: #c5b2d9;
     --infinite-edge: #6a4ea2;
     color-scheme: light;
 }
@@ -20,9 +21,9 @@
         --muted: #a29e95;
         --line: #3a3834;
         --select: #7aa7ff;
-        --finite-fill: rgba(82, 190, 175, 0.4);
+        --finite-fill: #2f5a53;
         --finite-edge: #6fd0c2;
-        --infinite-fill: rgba(170, 135, 230, 0.38);
+        --infinite-fill: #4f4265;
         --infinite-edge: #b79cf0;
         color-scheme: dark;
     }

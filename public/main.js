@@ -1,32 +1,33 @@
 // public/main.js
-// The shell: holds each world's state, turns touches and buttons into
-// operations, runs the settle loop, and draws. What an operation does is
-// decided in world.js; where gloops sit, in layout.js.
+// The shell: holds each world's state, feeds pointer events to the
+// gesture machine and carries out its effects, runs the settle loop, and
+// draws. What an operation does is decided in world.js; what a touch
+// means, in gesture.js; where gloops sit, in layout.js; how a split or
+// combine looks while it happens, in transition.js.
 //
-// Touch: tap a gloop to select or deselect it, drag across empty space
-// to lasso a selection, tap empty space to clear it, and drag one gloop
-// onto another to combine the two. Buttons apply to the selection, and
-// what an operation makes becomes the new selection, so pressing Split
-// again splits the pieces.
+// Buttons apply to the selection, and what an operation makes becomes the
+// new selection, so pressing Split again splits the pieces.
 
 import { createWorld, combine, split, regroup, setUnit, clearUnit, measure, totalVolume, FINITE, INFINITE } from './world.js';
 import { toNumber, format } from './rational.js';
-import { body, placeBirths, settle, targetScale, easeScale, hitTest, lassoSelect, groupByProximity, toWorld, toScreen } from './layout.js';
+import { body, placeBirths, settle, targetScale, easeScale, hitTest, lassoSelect, groupByProximity, toScreen, cameraFor, zoomAt, panBy, DEFAULT_VIEW, isDefaultView } from './layout.js';
+import { createTransitions, transitionFrame, neck } from './transition.js';
+import { step, IDLE } from './gesture.js';
 
 const MIN_TOUCH_PX = 22; // every gloop is touchable across at least this radius
-const TAP_SLOP_PX = 8;
+const EDGE_PX = 1.5;
 const LIMITS = { k: [2, 20], g: [2, 20], m: [1, 19] };
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const $ = (id) => document.getElementById(id);
 
-const view = { width: 1, height: 1, dpr: 1 };
+const screen = { width: 1, height: 1, dpr: 1 };
 const controls = { k: 2, g: 2, m: 1 };
 const sessions = { [FINITE]: fresh(FINITE), [INFINITE]: fresh(INFINITE) };
 let kind = FINITE;
-let scale = null;
-let gesture = null;
+let autoScale = null;
+let gesture = IDLE;
 let palette = {};
 
 function fresh(worldKind) {
@@ -34,6 +35,8 @@ function fresh(worldKind) {
     return {
         world,
         bodies: world.gloops.map((g) => body(g.id, toNumber(g.volume))),
+        view: DEFAULT_VIEW,
+        transitions: [],
         history: [],
         selected: new Set(),
         leftover: new Set(),
@@ -42,10 +45,13 @@ function fresh(worldKind) {
 }
 
 const session = () => sessions[kind];
-const camera = () => ({ scale, width: view.width, height: view.height });
+const wantedScale = () => targetScale(toNumber(totalVolume(session().world)), screen.width, screen.height);
+const camera = () => cameraFor(session().view, autoScale ?? wantedScale(), screen.width, screen.height);
+const now = () => performance.now() / 1000;
 
 // Applies an operation's result: a refusal becomes the status message;
-// anything else is recorded for undo and becomes the current state.
+// anything else is recorded for undo, becomes the current state, and
+// starts its transitions.
 function apply(result, leftover = []) {
     const s = session();
     if (result.refused) {
@@ -53,9 +59,11 @@ function apply(result, leftover = []) {
         return refresh();
     }
     s.history.push({ world: s.world, bodies: s.bodies, selected: new Set(s.selected) });
+    const born = result.born.map((kid) => ({ ...kid, volume: toNumber(kid.volume) }));
+    s.transitions = [...s.transitions, ...createTransitions(s.bodies, born, now())];
     s.world = result.world;
-    s.bodies = placeBirths(s.bodies, result.born.map((kid) => ({ ...kid, volume: toNumber(kid.volume) })));
-    if (result.born.length) s.selected = new Set(result.born.map((kid) => kid.id));
+    s.bodies = placeBirths(s.bodies, born);
+    if (born.length) s.selected = new Set(born.map((kid) => kid.id));
     s.leftover = new Set(leftover);
     s.message = leftover.length ? `${leftover.length} left over` : '';
     refresh();
@@ -85,11 +93,15 @@ const actions = {
         const s = session();
         const last = s.history.pop();
         if (!last) return;
-        Object.assign(s, last, { leftover: new Set(), message: '' });
+        Object.assign(s, last, { transitions: [], leftover: new Set(), message: '' });
         refresh();
     },
     reset() {
         sessions[kind] = fresh(kind);
+        refresh();
+    },
+    fit() {
+        session().view = DEFAULT_VIEW;
         refresh();
     },
 };
@@ -99,9 +111,10 @@ for (const [id, run] of Object.entries(actions)) $(id).addEventListener('click',
 for (const tab of document.querySelectorAll('[data-world]')) {
     tab.addEventListener('click', () => {
         kind = tab.dataset.world;
-        gesture = null;
-        scale = null;
+        gesture = IDLE;
+        autoScale = null;
         refresh();
+        palette = readPalette();
     });
 }
 
@@ -127,7 +140,6 @@ function refresh() {
     const count = s.world.gloops.length;
     const picked = selection().length;
     document.body.className = `world-${kind}`;
-    palette = readPalette();
     for (const tab of document.querySelectorAll('[data-world]')) tab.setAttribute('aria-selected', String(tab.dataset.world === kind));
     for (const stepper of document.querySelectorAll('.stepper')) {
         const name = stepper.dataset.name;
@@ -145,6 +157,7 @@ function refresh() {
     $('unit').disabled = picked !== 1 && !s.world.unit;
     $('unit').hidden = kind !== FINITE;
     $('undo').disabled = !s.history.length;
+    $('fit').hidden = isDefaultView(s.view);
     const parts = [`${count} ${count === 1 ? 'gloop' : 'gloops'}`];
     if (picked) parts.push(`${picked} selected`);
     const total = measure(s.world, totalVolume(s.world));
@@ -156,7 +169,7 @@ function refresh() {
 function readPalette() {
     const style = getComputedStyle(document.body);
     const read = (name) => style.getPropertyValue(name).trim();
-    return { bg: read('--bg'), text: read('--text'), muted: read('--muted'), fill: read('--gloop-fill'), edge: read('--gloop-edge'), select: read('--select') };
+    return { bg: read('--bg'), text: read('--text'), fill: read('--gloop-fill'), edge: read('--gloop-edge'), select: read('--select') };
 }
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => (palette = readPalette()));
@@ -168,116 +181,133 @@ const pointAt = (e) => {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 };
 
+function feed(type, e) {
+    const s = session();
+    const cam = camera();
+    const context = { hitAt: (p, excludeId) => hitTest(s.bodies, cam, p, MIN_TOUCH_PX, excludeId), selected: new Set(selection()) };
+    const { state, effects } = step(gesture, { type, pointerId: e.pointerId, point: pointAt(e) }, context);
+    gesture = state;
+    for (const effect of effects) perform(effect);
+}
+
+// Carries out one effect from the gesture machine.
+function perform(effect) {
+    const s = session();
+    const cam = camera();
+    switch (effect.type) {
+        case 'toggle':
+            if (s.selected.has(effect.id)) s.selected.delete(effect.id);
+            else s.selected.add(effect.id);
+            s.message = '';
+            return refresh();
+        case 'clear':
+        case 'lasso':
+            s.selected = new Set(effect.type === 'lasso' ? lassoSelect(s.bodies, cam, effect.path) : []);
+            s.message = '';
+            return refresh();
+        case 'drag':
+            s.bodies = s.bodies.map((b) => (b.id === effect.id ? { ...b, x: b.x + effect.dx / cam.scale, y: b.y + effect.dy / cam.scale } : b));
+            return;
+        case 'combine':
+            return apply(combine(s.world, effect.ids));
+        case 'split':
+            return apply(split(s.world, effect.ids, controls.k));
+        case 'pan':
+            s.view = panBy(s.view, cam, effect.dx, effect.dy);
+            return refresh();
+        case 'zoom':
+            s.view = zoomAt(s.view, cam, effect.focus, effect.factor);
+            return refresh();
+    }
+}
+
 canvas.addEventListener('pointerdown', (e) => {
-    if (gesture) return;
-    canvas.setPointerCapture(e.pointerId);
-    const p = pointAt(e);
-    const id = hitTest(session().bodies, camera(), p, MIN_TOUCH_PX);
-    if (id == null) {
-        gesture = { type: 'lasso', pointerId: e.pointerId, path: [p] };
-        return;
-    }
-    const b = session().bodies.find((it) => it.id === id);
-    const at = toWorld(p, camera());
-    gesture = { type: 'press', pointerId: e.pointerId, id, start: p, grab: { x: b.x - at.x, y: b.y - at.y }, target: null };
+    feed('down', e);
+    // Capture keeps a finger's moves coming when it leaves the canvas. It
+    // is best-effort: a pointer the browser no longer tracks cannot be
+    // captured, and the gesture still works without it.
+    try {
+        canvas.setPointerCapture(e.pointerId);
+    } catch {}
 });
+canvas.addEventListener('pointermove', (e) => feed('move', e));
+canvas.addEventListener('pointerup', (e) => feed('up', e));
+canvas.addEventListener('pointercancel', (e) => feed('cancel', e));
 
-canvas.addEventListener('pointermove', (e) => {
-    if (!gesture || gesture.pointerId !== e.pointerId) return;
-    const p = pointAt(e);
-    if (gesture.type === 'lasso') {
-        gesture.path.push(p);
-        return;
-    }
-    if (gesture.type === 'press' && Math.hypot(p.x - gesture.start.x, p.y - gesture.start.y) > TAP_SLOP_PX) gesture.type = 'drag';
-    if (gesture.type !== 'drag') return;
-    const at = toWorld(p, camera());
-    const s = session();
-    s.bodies = s.bodies.map((b) => (b.id === gesture.id ? { ...b, x: at.x + gesture.grab.x, y: at.y + gesture.grab.y } : b));
-    gesture.target = hitTest(s.bodies, camera(), p, MIN_TOUCH_PX, gesture.id);
-});
-
-canvas.addEventListener('pointerup', (e) => {
-    if (!gesture || gesture.pointerId !== e.pointerId) return;
-    const done = gesture;
-    gesture = null;
-    const s = session();
-    if (done.type === 'press') {
-        if (s.selected.has(done.id)) s.selected.delete(done.id);
-        else s.selected.add(done.id);
-        s.message = '';
-        return refresh();
-    }
-    if (done.type === 'drag') {
-        if (done.target != null) apply(combine(s.world, [done.id, done.target]));
-        return;
-    }
-    const xs = done.path.map((p) => p.x);
-    const ys = done.path.map((p) => p.y);
-    const drawn = Math.max(...xs) - Math.min(...xs) + Math.max(...ys) - Math.min(...ys) > TAP_SLOP_PX * 2;
-    s.selected = new Set(drawn ? lassoSelect(s.bodies, camera(), done.path) : []);
-    s.message = '';
-    refresh();
-});
-
-canvas.addEventListener('pointercancel', (e) => {
-    if (gesture?.pointerId === e.pointerId) gesture = null;
-});
+// A trackpad pinch (or a wheel with Ctrl or ⌘) zooms; any other wheel or
+// two-finger trackpad scroll pans.
+canvas.addEventListener(
+    'wheel',
+    (e) => {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) perform({ type: 'zoom', focus: pointAt(e), factor: Math.exp(-e.deltaY * 0.01) });
+        else perform({ type: 'pan', dx: -e.deltaX, dy: -e.deltaY });
+    },
+    { passive: false },
+);
 
 // The loop.
 
 function resize() {
     const rect = canvas.getBoundingClientRect();
-    view.width = rect.width;
-    view.height = rect.height;
-    view.dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(rect.width * view.dpr);
-    canvas.height = Math.round(rect.height * view.dpr);
+    screen.width = rect.width;
+    screen.height = rect.height;
+    screen.dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(rect.width * screen.dpr);
+    canvas.height = Math.round(rect.height * screen.dpr);
 }
 
 new ResizeObserver(resize).observe(canvas);
 
 let last = performance.now();
-function frame(now) {
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
+function frame(time) {
+    const dt = Math.min(0.05, (time - last) / 1000);
+    last = time;
     const s = session();
-    const wanted = targetScale(toNumber(totalVolume(s.world)), view.width, view.height);
-    scale = scale == null ? wanted : easeScale(scale, wanted, dt);
-    s.bodies = settle(s.bodies, dt, gesture?.type === 'drag' ? gesture.id : null);
-    draw();
+    autoScale = autoScale == null ? wantedScale() : easeScale(autoScale, wantedScale(), dt);
+    s.bodies = settle(s.bodies, dt, gesture.mode === 'drag' ? gesture.id : null);
+    const shapes = transitionFrame(s.transitions, s.bodies, now());
+    s.transitions = shapes.live;
+    draw(shapes);
     requestAnimationFrame(frame);
 }
 
-function draw() {
+// Draws every gloop, ghost and neck as one fluid: first all of them a
+// little larger in the edge colour, then all of them in the fill colour,
+// so overlapping shapes show a single outline.
+function draw(shapes) {
     const s = session();
     const cam = camera();
-    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    ctx.setTransform(screen.dpr, 0, 0, screen.dpr, 0, 0);
     ctx.fillStyle = palette.bg;
-    ctx.fillRect(0, 0, view.width, view.height);
+    ctx.fillRect(0, 0, screen.width, screen.height);
+    const onScreen = (c) => ({ ...toScreen(c, cam), r: c.r * cam.scale });
+    const gloops = s.bodies.map((b) => {
+        const growing = shapes.radii.get(b.id);
+        return { id: b.id, ...onScreen({ ...b, r: growing ?? b.r }), settled: growing == null };
+    });
+    const circles = [...gloops.map((g) => ({ ...g, r: g.settled ? Math.max(g.r, 0.75) : g.r })), ...shapes.ghosts.map(onScreen)];
+    const necks = shapes.necks.map(([a, b]) => [onScreen(a), onScreen(b)]);
+    for (const [color, grow] of [[palette.edge, EDGE_PX], [palette.fill, 0]]) {
+        ctx.fillStyle = color;
+        for (const c of circles) fillCircle(c, c.r + grow);
+        for (const [a, b] of necks) fillNeck(neck({ ...a, r: a.r + grow }, { ...b, r: b.r + grow }));
+    }
+    const target = gesture.mode === 'drag' ? gesture.target : null;
     const volumes = new Map(s.world.gloops.map((g) => [g.id, g.volume]));
-    const target = gesture?.type === 'drag' ? gesture.target : null;
-    for (const b of s.bodies) {
-        const c = toScreen(b, cam);
-        const r = Math.max(b.r * cam.scale, 0.75);
-        circle(c, r);
-        ctx.fillStyle = palette.fill;
-        ctx.fill();
-        ctx.lineWidth = 1.5;
-        ctx.strokeStyle = palette.edge;
-        ctx.stroke();
-        if (s.selected.has(b.id) || b.id === target) ring(c, r + 3, 3, b.id === target ? [6, 4] : []);
-        else if (s.leftover.has(b.id)) ring(c, r + 3, 2, [3, 4]);
-        const label = volumes.has(b.id) ? measure(s.world, volumes.get(b.id)) : null;
-        if (label && r >= 14) {
+    for (const g of gloops) {
+        if (s.selected.has(g.id) || g.id === target) ring(g, g.r + 3, 3, g.id === target ? [6, 4] : []);
+        else if (s.leftover.has(g.id)) ring(g, g.r + 3, 2, [3, 4]);
+        const label = volumes.has(g.id) ? measure(s.world, volumes.get(g.id)) : null;
+        if (label && g.r >= 14) {
             ctx.fillStyle = palette.text;
-            ctx.font = `${Math.round(Math.min(28, Math.max(11, r * 0.45)))}px system-ui, sans-serif`;
+            ctx.font = `${Math.round(Math.min(28, Math.max(11, g.r * 0.45)))}px system-ui, sans-serif`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(format(label), c.x, c.y);
+            ctx.fillText(format(label), g.x, g.y);
         }
     }
-    if (gesture?.type === 'lasso' && gesture.path.length > 1) {
+    if (gesture.mode === 'lasso' && gesture.path.length > 1) {
         ctx.beginPath();
         gesture.path.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
         ctx.closePath();
@@ -289,13 +319,27 @@ function draw() {
     }
 }
 
-function circle(c, r) {
+function fillCircle(c, r) {
+    if (r <= 0) return;
     ctx.beginPath();
     ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function fillNeck(n) {
+    if (!n) return;
+    ctx.beginPath();
+    ctx.moveTo(n.p1.x, n.p1.y);
+    ctx.bezierCurveTo(n.h1.x, n.h1.y, n.h3.x, n.h3.y, n.p3.x, n.p3.y);
+    ctx.lineTo(n.p4.x, n.p4.y);
+    ctx.bezierCurveTo(n.h4.x, n.h4.y, n.h2.x, n.h2.y, n.p2.x, n.p2.y);
+    ctx.closePath();
+    ctx.fill();
 }
 
 function ring(c, r, width, dash) {
-    circle(c, r);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
     ctx.setLineDash(dash);
     ctx.lineWidth = width;
     ctx.strokeStyle = palette.select;
@@ -305,4 +349,5 @@ function ring(c, r, width, dash) {
 
 resize();
 refresh();
+palette = readPalette();
 requestAnimationFrame(frame);

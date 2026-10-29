@@ -139,9 +139,26 @@ The prototype is a web page for touch screens, in plain JavaScript modules with 
 
 ### Touch
 
+One finger:
+
 - Tap a gloop to select or deselect it.
 - Drag across empty space to lasso a selection, and tap empty space to clear it.
 - Drag one gloop onto another to combine the two.
+
+Two fingers on gloops:
+
+- Pinch together, to 0.6 of the fingers' starting distance, to combine.
+- Spread apart, to 1.5 times the starting distance, to split into k, where k is the Split stepper's value.
+- The gesture acts on the whole selection when a finger starts on a selected gloop, and on the gloops under the fingers otherwise.
+- A gesture acts once. Nothing more happens until every finger is lifted.
+
+Two fingers on empty space zoom about their midpoint and pan with it.
+On a trackpad, pinching zooms and scrolling pans.
+
+A third finger is ignored.
+A second finger during a one-finger drag is ignored too.
+
+Touch is a pure state machine: a pointer event and the current state give a new state and a list of effects, which the shell carries out.
 
 ### Buttons
 
@@ -158,13 +175,28 @@ Whatever an operation makes becomes the new selection, so pressing Split repeate
 
 ### Scale
 
-The camera's scale depends only on the world's total volume, which in the infinite world is the count.
+The camera's automatic scale depends only on the world's total volume, which in the infinite world is the count.
 It is chosen so the whole world covers a fixed share of the screen, and so the whole, merged into one gloop, would always fit.
 
-The finite world's total never changes, so its camera never moves.
+The finite world's total never changes, so its automatic scale never changes.
 That is how conservation shows: the pieces always fill the same space the first gloop did.
 
+A learner's zoom and pan sit on top of the automatic scale, from half size to 32 times, and are kept per world.
+A Fit button appears whenever the view has moved, and returns it to the automatic scale.
+
 The infinite world's camera zooms out as the count grows, so every gloop is drawn smaller as there are more of them.
+
+### Transitions
+
+Splits and combines are animated over 0.42 seconds, so a gloop reads as one fluid body pulling apart or flowing together.
+
+- The gloops an operation used up remain briefly as ghosts. They slide to the centre of the new gloops and shrink.
+- The new gloops grow from nothing where the physics places them.
+- Metaball necks join each ghost to each new gloop while they are close.
+- Areas are eased, not radii. A ghost's area falls as 1 − e while a new gloop's rises as e, so in the finite world the drawn total stays constant throughout.
+
+Gloops are drawn with opaque fills, all shapes first in the edge colour and slightly larger, then in the fill colour.
+Overlapping circles and necks therefore show a single outline.
 
 ### Small gloops
 
@@ -174,7 +206,6 @@ The lasso is the way to select many small gloops at once.
 
 ## Open questions
 
-- Whether learners need zoom in the finite world, where the camera never moves and halvings get small fast.
 - Whether grouping by nearness is predictable enough, or whether learners need to form groups themselves.
 - Whether "Select all" should be implicit when nothing is selected.
 - Whether labels should be shown as mixed numbers (3½) rather than improper fractions (7/2).
