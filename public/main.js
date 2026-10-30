@@ -5,14 +5,15 @@
 // means, in gesture.js; where gloops sit, in layout.js; how a split or
 // combine looks while it happens, in transition.js.
 //
+// Touch can do everything the buttons do; the buttons stay as a fallback.
 // Buttons apply to the selection, and what an operation makes becomes the
 // new selection, so pressing Split again splits the pieces.
 
 import { createWorld, combine, split, regroup, setUnit, clearUnit, measure, totalVolume, FINITE, INFINITE } from './world.js';
-import { toNumber, format } from './rational.js';
+import { toNumber, format, equals } from './rational.js';
 import { body, placeBirths, settle, targetScale, easeScale, hitTest, lassoSelect, groupByProximity, toScreen, cameraFor, zoomAt, panBy, DEFAULT_VIEW, isDefaultView } from './layout.js';
 import { createTransitions, transitionFrame, neck } from './transition.js';
-import { step, IDLE } from './gesture.js';
+import { step, pending, IDLE } from './gesture.js';
 
 const MIN_TOUCH_PX = 22; // every gloop is touchable across at least this radius
 const EDGE_PX = 1.5;
@@ -38,6 +39,7 @@ function fresh(worldKind) {
         view: DEFAULT_VIEW,
         transitions: [],
         history: [],
+        future: [],
         selected: new Set(),
         leftover: new Set(),
         message: '',
@@ -58,7 +60,8 @@ function apply(result, leftover = []) {
         s.message = result.refused;
         return refresh();
     }
-    s.history.push({ world: s.world, bodies: s.bodies, selected: new Set(s.selected) });
+    s.history.push(snapshot(s));
+    s.future = [];
     const born = result.born.map((kid) => ({ ...kid, volume: toNumber(kid.volume) }));
     s.transitions = [...s.transitions, ...createTransitions(s.bodies, born, now())];
     s.world = result.world;
@@ -66,6 +69,18 @@ function apply(result, leftover = []) {
     if (born.length) s.selected = new Set(born.map((kid) => kid.id));
     s.leftover = new Set(leftover);
     s.message = leftover.length ? `${leftover.length} left over` : '';
+    refresh();
+}
+
+const snapshot = (s) => ({ world: s.world, bodies: s.bodies, selected: new Set(s.selected) });
+
+// Steps back or forward through a world's history.
+function travel(from, to) {
+    const s = session();
+    const next = s[from].pop();
+    if (!next) return;
+    s[to].push(snapshot(s));
+    Object.assign(s, next, { transitions: [], leftover: new Set(), message: '' });
     refresh();
 }
 
@@ -79,23 +94,14 @@ const actions = {
     },
     combine: () => apply(combine(session().world, selection())),
     split: () => apply(split(session().world, selection(), controls.k)),
-    regroup() {
-        const { groups, remainder } = groupByProximity(session().bodies, selection(), controls.g);
-        if (!groups.length) return apply({ refused: `Select at least ${controls.g} gloops to regroup.` });
-        apply(regroup(session().world, groups, controls.m), remainder);
-    },
+    regroup: () => regroupNearby(selection(), controls.g, controls.m),
     unit() {
         const s = session();
         const ids = selection();
         apply(ids.length === 1 ? setUnit(s.world, ids[0]) : clearUnit(s.world));
     },
-    undo() {
-        const s = session();
-        const last = s.history.pop();
-        if (!last) return;
-        Object.assign(s, last, { transitions: [], leftover: new Set(), message: '' });
-        refresh();
-    },
+    undo: () => travel('history', 'future'),
+    redo: () => travel('future', 'history'),
     reset() {
         sessions[kind] = fresh(kind);
         refresh();
@@ -105,6 +111,23 @@ const actions = {
         refresh();
     },
 };
+
+// Operation 4 on gloops grouped by nearness; what can't be grouped is the
+// remainder.
+function regroupNearby(ids, g, m) {
+    const { groups, remainder } = groupByProximity(session().bodies, ids, g);
+    if (!groups.length) return apply({ refused: `Select at least ${g} gloops to regroup.` });
+    apply(regroup(session().world, groups, m), remainder);
+}
+
+// A long press makes a gloop the unit, or clears the unit if the gloop
+// already measures 1.
+function toggleUnit(id) {
+    const { world } = session();
+    const volume = world.gloops.find((g) => g.id === id)?.volume;
+    const isUnit = world.unit && volume && equals(volume, world.unit);
+    apply(isUnit ? clearUnit(world) : setUnit(world, id));
+}
 
 for (const [id, run] of Object.entries(actions)) $(id).addEventListener('click', run);
 
@@ -157,6 +180,7 @@ function refresh() {
     $('unit').disabled = picked !== 1 && !s.world.unit;
     $('unit').hidden = kind !== FINITE;
     $('undo').disabled = !s.history.length;
+    $('redo').disabled = !s.future.length;
     $('fit').hidden = isDefaultView(s.view);
     const parts = [`${count} ${count === 1 ? 'gloop' : 'gloops'}`];
     if (picked) parts.push(`${picked} selected`);
@@ -169,7 +193,7 @@ function refresh() {
 function readPalette() {
     const style = getComputedStyle(document.body);
     const read = (name) => style.getPropertyValue(name).trim();
-    return { bg: read('--bg'), text: read('--text'), fill: read('--gloop-fill'), edge: read('--gloop-edge'), select: read('--select') };
+    return { bg: read('--bg'), surface: read('--surface'), text: read('--text'), line: read('--line'), fill: read('--gloop-fill'), edge: read('--gloop-edge'), select: read('--select') };
 }
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => (palette = readPalette()));
@@ -185,7 +209,8 @@ function feed(type, e) {
     const s = session();
     const cam = camera();
     const context = { hitAt: (p, excludeId) => hitTest(s.bodies, cam, p, MIN_TOUCH_PX, excludeId), selected: new Set(selection()) };
-    const { state, effects } = step(gesture, { type, pointerId: e.pointerId, point: pointAt(e) }, context);
+    const event = e ? { type, pointerId: e.pointerId, point: pointAt(e), time: now() } : { type, time: now() };
+    const { state, effects } = step(gesture, event, context);
     gesture = state;
     for (const effect of effects) perform(effect);
 }
@@ -200,6 +225,8 @@ function perform(effect) {
             else s.selected.add(effect.id);
             s.message = '';
             return refresh();
+        case 'all':
+            return actions.all();
         case 'clear':
         case 'lasso':
             s.selected = new Set(effect.type === 'lasso' ? lassoSelect(s.bodies, cam, effect.path) : []);
@@ -211,7 +238,14 @@ function perform(effect) {
         case 'combine':
             return apply(combine(s.world, effect.ids));
         case 'split':
-            return apply(split(s.world, effect.ids, controls.k));
+            return apply(split(s.world, effect.ids, effect.k));
+        case 'regroup':
+            return regroupNearby(effect.ids, effect.g, effect.m);
+        case 'unit':
+            return toggleUnit(effect.id);
+        case 'undo':
+        case 'redo':
+            return actions[effect.type]();
         case 'pan':
             s.view = panBy(s.view, cam, effect.dx, effect.dy);
             return refresh();
@@ -263,6 +297,7 @@ let last = performance.now();
 function frame(time) {
     const dt = Math.min(0.05, (time - last) / 1000);
     last = time;
+    feed('tick');
     const s = session();
     autoScale = autoScale == null ? wantedScale() : easeScale(autoScale, wantedScale(), dt);
     s.bodies = settle(s.bodies, dt, gesture.mode === 'drag' ? gesture.id : null);
@@ -307,6 +342,8 @@ function draw(shapes) {
             ctx.fillText(format(label), g.x, g.y);
         }
     }
+    const intent = pending(gesture, now());
+    if (intent) preview(intent, new Map(gloops.map((g) => [g.id, g])));
     if (gesture.mode === 'lasso' && gesture.path.length > 1) {
         ctx.beginPath();
         gesture.path.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
@@ -317,6 +354,60 @@ function draw(shapes) {
         ctx.stroke();
         ctx.setLineDash([]);
     }
+}
+
+// Shows what a touch will do when its fingers lift: a filling ring for a
+// long press; for a hand, the pieces a split will cut, rings on what a
+// combine or regroup will use, and the numbers, above the fingers.
+function preview(intent, onScreen) {
+    if (intent.type === 'hold') {
+        const g = onScreen.get(intent.id);
+        if (!g) return;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y, g.r + 7, -Math.PI / 2, -Math.PI / 2 + intent.progress * Math.PI * 2);
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = palette.select;
+        ctx.stroke();
+        return;
+    }
+    const targets = intent.ids.map((id) => onScreen.get(id)).filter(Boolean);
+    if (intent.type === 'split') {
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = palette.edge;
+        for (const g of targets.filter((t) => t.r >= 6)) {
+            ctx.beginPath();
+            for (let i = 0; i < intent.k; i++) {
+                const angle = -Math.PI / 2 + (i * Math.PI * 2) / intent.k;
+                ctx.moveTo(g.x, g.y);
+                ctx.lineTo(g.x + Math.cos(angle) * g.r, g.y + Math.sin(angle) * g.r);
+            }
+            ctx.stroke();
+        }
+    } else {
+        for (const g of targets) ring(g, g.r + 3, 2, [6, 4]);
+    }
+    const text = { split: `1 → ${intent.k}`, combine: `${intent.ids.length} → 1`, regroup: `${intent.g} → ${intent.m}` }[intent.type];
+    badge(text, intent.at);
+}
+
+// A label in a pill, above a point and kept on screen.
+function badge(text, at) {
+    ctx.font = '600 22px system-ui, sans-serif';
+    const width = ctx.measureText(text).width + 28;
+    const height = 40;
+    const x = Math.min(Math.max(at.x - width / 2, 8), screen.width - width - 8);
+    const y = Math.min(Math.max(at.y - 110, 8), screen.height - height - 8);
+    ctx.beginPath();
+    ctx.roundRect(x, y, width, height, height / 2);
+    ctx.fillStyle = palette.surface;
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = palette.line;
+    ctx.stroke();
+    ctx.fillStyle = palette.text;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x + width / 2, y + height / 2);
 }
 
 function fillCircle(c, r) {

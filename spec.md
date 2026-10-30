@@ -139,37 +139,51 @@ The prototype is a web page for touch screens, in plain JavaScript modules with 
 
 ### Touch
 
+Touch can do everything, and the number of fingers is the number in the operation.
+
 One finger:
 
 - Tap a gloop to select or deselect it.
-- Drag across empty space to lasso a selection, and tap empty space to clear it.
+- Hold a gloop for half a second to make its volume the unit. Holding the gloop that measures 1 clears the unit. A ring fills around the gloop while it is held.
 - Drag one gloop onto another to combine the two.
+- Drag across empty space to lasso a selection.
+- Tap empty space to clear the selection, and double-tap it to select every gloop.
 
-Two fingers on gloops:
+Several fingers form a hand when any of them lands on a gloop:
 
-- Pinch together, to 0.6 of the fingers' starting distance, to combine.
-- Spread apart, to 1.5 times the starting distance, to split into k, where k is the Split stepper's value.
-- The gesture acts on the whole selection when a finger starts on a selected gloop, and on the gloops under the fingers otherwise.
-- A gesture acts once. Nothing more happens until every finger is lifted.
+- **Split into k.** Spread k fingers apart to split into k. The hand must grow to 1.5 times its starting size, and by at least 20 pixels.
+- **Spread further for more.** Past that, every 20 pixels of further spread, after 40 free pixels, adds a piece, up to 20. This reaches numbers beyond the fingers of a hand.
+- **Combine.** Pinch the fingers together, to 0.6 of the starting size and by at least 12 pixels, to combine the gloops under them.
+- **Regroup g into m.** Pinch g fingers together, lift some without lifting the rest, and spread the m that are left. Fingers in is g and fingers out is m, so m < g holds because fingers can only be lifted.
+- **Selection.** A hand acts on the whole selection when a finger lands on a selected gloop, and on the touched gloops otherwise. On a selection, a combine merges every selected gloop, and a regroup groups the selection by nearness into groups of g, the number of fingers that pinched.
+- **Preview.** Nothing happens until a finger lifts. Until then, the pending operation is previewed: a split draws its cuts on each gloop, a combine or regroup rings the gloops it will use, and a badge above the fingers shows 1 → k, n → 1 or g → m. Moving back past halfway to the threshold cancels.
 
-Two fingers on empty space zoom about their midpoint and pan with it.
+Hand size is the fingers' mean distance from their centre.
+A finger that lands before the hand has pinched joins it and restarts its measure.
+A finger that lands after a pinch, or during a one-finger drag, is ignored.
+
+Several fingers on empty space zoom about their centre and pan with it.
 On a trackpad, pinching zooms and scrolling pans.
 
-A third finger is ignored.
-A second finger during a one-finger drag is ignored too.
+A quick tap of two fingers, anywhere, undoes, and of three redoes.
+
+After a hand has acted, nothing more happens until every finger is lifted.
+
+iPadOS takes four- and five-finger pinches for itself unless its multitasking gestures are turned off in Settings.
 
 Touch is a pure state machine: a pointer event and the current state give a new state and a list of effects, which the shell carries out.
+The shell also sends a tick every frame, which is how a held finger becomes a long press.
 
 ### Buttons
 
-The buttons act on the selection.
+The buttons are a fallback for everything touch does, and act on the selection.
 
 - **Select all** selects every gloop, which turns operations 3 and 4 global.
 - **Combine** is operation 1, on everything selected.
 - **Split into k** is operation 2 with one gloop selected and operation 3 with several. A stepper sets k, from 2 to 20.
 - **Regroup g → m** is operation 4. Steppers set g, from 2 to 20, and m, from 1 to g − 1. The selection is grouped by nearness: the leftmost ungrouped gloop takes its g − 1 nearest ungrouped neighbours, until fewer than g remain.
 - **Set unit**, in the finite world only, declares the one selected gloop's volume to be 1. Every gloop then shows its volume in that unit, and the status line shows the total. With no single gloop selected, the same button clears the unit.
-- **Undo** and **Reset** act on the current world only. The two worlds keep separate state.
+- **Undo**, **Redo** and **Reset** act on the current world only. The two worlds keep separate state.
 
 Whatever an operation makes becomes the new selection, so pressing Split repeatedly keeps splitting the newest pieces.
 
@@ -208,4 +222,5 @@ The lasso is the way to select many small gloops at once.
 
 - Whether grouping by nearness is predictable enough, or whether learners need to form groups themselves.
 - Whether "Select all" should be implicit when nothing is selected.
+- Whether the spread and dial distances, tuned in pixels on a tablet, suit a phone.
 - Whether labels should be shown as mixed numbers (3½) rather than improper fractions (7/2).
